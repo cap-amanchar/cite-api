@@ -1,0 +1,83 @@
+# .github/workflows/backend-deploy.yml
+
+name: Backend API CI/CD
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '16'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+  deploy:
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '16'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Create .env file
+        run: |
+          touch .env
+          echo "JWT_SECRET=${{ secrets.JWT_SECRET }}" >> .env
+          echo "PORT=3000" >> .env
+          # Add other environment variables as needed
+
+      # Option 1: Deploy to Railway
+      - name: Deploy to Railway
+        uses: railwayapp/railway-github-action@v1.0.0
+        with:
+          railway_token: ${{ secrets.RAILWAY_TOKEN }}
+
+      # Option 2: Deploy to Heroku (uncomment if using Heroku)
+      # - name: Deploy to Heroku
+      #   uses: akhileshns/heroku-deploy@v3.12.13
+      #   with:
+      #     heroku_api_key: ${{ secrets.HEROKU_API_KEY }}
+      #     heroku_app_name: ${{ secrets.HEROKU_APP_NAME }}
+      #     heroku_email: ${{ secrets.HEROKU_EMAIL }}
+
+      # Option 3: Deploy to Digital Ocean App Platform (uncomment if using DO)
+      # - name: Deploy to Digital Ocean
+      #   uses: digitalocean/app_action@main
+      #   with:
+      #     app_name: ${{ secrets.DIGITALOCEAN_APP_NAME }}
+      #     token: ${{ secrets.DIGITALOCEAN_TOKEN }}
+
+      - name: Wait for deployment
+        run: sleep 30
+
+      - name: Health check
+        run: |
+          curl -f https://${{ secrets.API_HEALTH_URL }}/health || exit 1
