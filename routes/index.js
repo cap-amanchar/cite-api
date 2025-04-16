@@ -6,6 +6,7 @@ const absenceRoutes = require('./absenceRoutes');
 const leaveBalanceRoutes = require('./leaveBalanceRoutes');
 const notificationRoutes = require('./notificationRoutes');
 const reportRoutes = require('./reportRoutes');
+const databaseRoutes = require('./databaseRoutes'); // Add this line
 
 const router = express.Router();
 
@@ -26,5 +27,6 @@ router.use('/absences', absenceRoutes);
 router.use('/leave-balances', leaveBalanceRoutes);
 router.use('/notifications', notificationRoutes);
 router.use('/reports', reportRoutes);
+router.use('/database', databaseRoutes); // Add this line
 
 module.exports = router;
