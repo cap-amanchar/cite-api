@@ -1,6 +1,6 @@
 /**
- * Comprehensive testing data seed script
- * Run with: node testDataSeed.js
+ * Comprehensive testing data seed script with fixes for foreign key constraints
+ * Run with: node seed.js
  */
 const bcrypt = require('bcrypt');
 const { db, initializeDatabase } = require('./config/database');
@@ -169,98 +169,6 @@ const employeeUsers = [
         departmentId: 3,
         position: 'Content Creator',
         hireDate: '2021-09-30'
-    },
-    // Finance Department
-    {
-        username: 'fin_employee1',
-        password: 'Employee#130',
-        fullName: 'Natalie Brown',
-        email: 'natalie.brown@example.com',
-        phone: '555-1118',
-        role: 'employee',
-        departmentId: 4,
-        position: 'Financial Analyst',
-        hireDate: '2020-04-05'
-    },
-    {
-        username: 'fin_employee2',
-        password: 'Employee#131',
-        fullName: 'Ethan Wright',
-        email: 'ethan.wright@example.com',
-        phone: '555-1119',
-        role: 'employee',
-        departmentId: 4,
-        position: 'Accountant',
-        hireDate: '2022-03-01'
-    },
-    // Sales Department
-    {
-        username: 'sales_employee1',
-        password: 'Employee#132',
-        fullName: 'Grace Miller',
-        email: 'grace.miller@example.com',
-        phone: '555-1120',
-        role: 'employee',
-        departmentId: 5,
-        position: 'Sales Representative',
-        hireDate: '2021-01-20'
-    },
-    {
-        username: 'sales_employee2',
-        password: 'Employee#133',
-        fullName: 'Thomas Anderson',
-        email: 'thomas.anderson@example.com',
-        phone: '555-1121',
-        role: 'employee',
-        departmentId: 5,
-        position: 'Account Executive',
-        hireDate: '2020-11-12'
-    },
-    // Customer Support Department
-    {
-        username: 'support_employee1',
-        password: 'Employee#134',
-        fullName: 'Zoe Garcia',
-        email: 'zoe.garcia@example.com',
-        phone: '555-1122',
-        role: 'employee',
-        departmentId: 6,
-        position: 'Support Specialist',
-        hireDate: '2022-04-18'
-    },
-    {
-        username: 'support_employee2',
-        password: 'Employee#135',
-        fullName: 'Ryan Phillips',
-        email: 'ryan.phillips@example.com',
-        phone: '555-1123',
-        role: 'employee',
-        departmentId: 6,
-        position: 'Technical Support',
-        hireDate: '2021-07-06'
-    },
-    // R&D Department
-    {
-        username: 'rd_employee1',
-        password: 'Employee#136',
-        fullName: 'Isabella White',
-        email: 'isabella.white@example.com',
-        phone: '555-1124',
-        role: 'employee',
-        departmentId: 7,
-        position: 'Research Scientist',
-        hireDate: '2019-09-15'
-    },
-    {
-        username: 'rd_employee2',
-        password: 'Employee#137',
-        fullName: 'Lucas Moore',
-        email: 'lucas.moore@example.com',
-        phone: '555-1125',
-        role: 'employee',
-        departmentId: 7,
-        position: 'Product Designer',
-        hireDate: '2020-08-29'
     }
 ];
 
@@ -341,11 +249,6 @@ const absencePolicies = [
 const currentDate = new Date();
 const currentYear = currentDate.getFullYear();
 
-// Create absence requests spanning the current year
-const getRandomDate = (start, end) => {
-    return new Date(start.getTime() + Math.random() * (end.getTime() - start.getTime()));
-};
-
 // Format date to YYYY-MM-DD
 const formatDate = (date) => {
     return date.toISOString().split('T')[0];
@@ -357,10 +260,11 @@ const getDateInCurrentYear = (monthOffset, dayOffset) => {
     return formatDate(date);
 };
 
-// Store employee IDs mapped by username
-const employeeIdMap = {};
-// Store manager IDs mapped by username
-const managerIdMap = {};
+// Maps to store relationships between entities
+const accountIdMap = {}; // username -> account ID
+const employeeIdMap = {}; // username -> employee ID
+const managerIdMap = {}; // username -> manager ID
+const managerAccountMap = {}; // manager ID -> account ID
 
 /**
  * Seed the database with testing data
@@ -402,15 +306,50 @@ const seedTestingData = async () => {
 const seedDepartments = () => {
     return new Promise((resolve, reject) => {
         db.serialize(() => {
-            const stmt = db.prepare('INSERT INTO departments (name, location, employee_count) VALUES (?, ?, 0)');
-
-            departments.forEach(department => {
-                stmt.run(department.name, department.location);
-            });
-
-            stmt.finalize(err => {
-                if (err) return reject(err);
-                resolve();
+            db.run('BEGIN TRANSACTION');
+            
+            // First check if departments already exist
+            db.get('SELECT COUNT(*) as count FROM departments', [], (err, row) => {
+                if (err) {
+                    db.run('ROLLBACK');
+                    return reject(err);
+                }
+                
+                if (row && row.count >= departments.length) {
+                    console.log(`Departments already exist (${row.count} found). Skipping...`);
+                    db.run('COMMIT');
+                    return resolve();
+                }
+                
+                // Clear existing departments to avoid duplicates
+                db.run('DELETE FROM departments', [], (err) => {
+                    if (err) {
+                        db.run('ROLLBACK');
+                        return reject(err);
+                    }
+                    
+                    // Insert departments one by one to get IDs reliably
+                    let completed = 0;
+                    departments.forEach((department, index) => {
+                        db.run(
+                            'INSERT INTO departments (id, name, location, employee_count) VALUES (?, ?, ?, 0)',
+                            [index + 1, department.name, department.location],
+                            function(err) {
+                                if (err) {
+                                    console.error('Error inserting department:', err);
+                                    db.run('ROLLBACK');
+                                    return reject(err);
+                                }
+                                
+                                completed++;
+                                if (completed === departments.length) {
+                                    db.run('COMMIT');
+                                    resolve();
+                                }
+                            }
+                        );
+                    });
+                });
             });
         });
     });
@@ -423,6 +362,8 @@ const seedManagerUsers = async () => {
     return new Promise((resolve, reject) => {
         db.serialize(async () => {
             try {
+                db.run('BEGIN TRANSACTION');
+                
                 // Insert managers one by one
                 for (const user of managerUsers) {
                     const hashedPassword = await bcrypt.hash(user.password, 10);
@@ -438,6 +379,9 @@ const seedManagerUsers = async () => {
                             }
                         );
                     });
+                    
+                    // Store account ID for later reference
+                    accountIdMap[user.username] = accountId;
 
                     // Insert manager record
                     const managerId = await new Promise((resolve, reject) => {
@@ -453,6 +397,7 @@ const seedManagerUsers = async () => {
 
                     // Store mapping for later use
                     managerIdMap[user.username] = managerId;
+                    managerAccountMap[managerId] = accountId;
 
                     // Set department manager
                     await new Promise((resolve, reject) => {
@@ -466,9 +411,11 @@ const seedManagerUsers = async () => {
                         );
                     });
                 }
-
+                
+                db.run('COMMIT');
                 resolve();
             } catch (error) {
+                db.run('ROLLBACK');
                 reject(error);
             }
         });
@@ -482,6 +429,8 @@ const seedEmployeeUsers = async () => {
     return new Promise((resolve, reject) => {
         db.serialize(async () => {
             try {
+                db.run('BEGIN TRANSACTION');
+                
                 // Insert employees one by one
                 for (const user of employeeUsers) {
                     const hashedPassword = await bcrypt.hash(user.password, 10);
@@ -497,9 +446,12 @@ const seedEmployeeUsers = async () => {
                             }
                         );
                     });
+                    
+                    // Store account ID for later reference
+                    accountIdMap[user.username] = accountId;
 
                     // Get manager ID for this department
-                    const managerId = await new Promise((resolve, reject) => {
+                    const manager = await new Promise((resolve, reject) => {
                         db.get(
                             'SELECT manager_id FROM departments WHERE id = ?',
                             [user.departmentId],
@@ -514,7 +466,7 @@ const seedEmployeeUsers = async () => {
                     const employeeId = await new Promise((resolve, reject) => {
                         db.run(
                             'INSERT INTO employees (account_id, department_id, position, manager_id, status, hire_date) VALUES (?, ?, ?, ?, ?, ?)',
-                            [accountId, user.departmentId, user.position, managerId, 'active', user.hireDate || null],
+                            [accountId, user.departmentId, user.position, manager, 'active', user.hireDate || null],
                             function(err) {
                                 if (err) return reject(err);
                                 resolve(this.lastID);
@@ -537,9 +489,11 @@ const seedEmployeeUsers = async () => {
                         );
                     });
                 }
-
+                
+                db.run('COMMIT');
                 resolve();
             } catch (error) {
+                db.run('ROLLBACK');
                 reject(error);
             }
         });
@@ -552,14 +506,20 @@ const seedEmployeeUsers = async () => {
 const seedAbsencePolicies = () => {
     return new Promise((resolve, reject) => {
         db.serialize(() => {
+            db.run('BEGIN TRANSACTION');
+            
             // First check if policies exist
             db.get('SELECT COUNT(*) as count FROM absence_policies', [], (err, row) => {
-                if (err) return reject(err);
+                if (err) {
+                    db.run('ROLLBACK');
+                    return reject(err);
+                }
                 
-                if (row && row.count > 0) {
-                    console.log('Absence policies already exist, updating...');
+                if (row && row.count >= absencePolicies.length) {
+                    console.log(`Absence policies already exist (${row.count} found). Updating...`);
                     
                     // Update existing policies
+                    let completed = 0;
                     absencePolicies.forEach(policy => {
                         db.run(
                             `UPDATE absence_policies SET 
@@ -583,41 +543,62 @@ const seedAbsencePolicies = () => {
                             ],
                             function(err) {
                                 if (err) {
-                                    console.error('Error updating policy:', err, policy);
+                                    console.error('Error updating policy:', err);
+                                    db.run('ROLLBACK');
+                                    return reject(err);
+                                }
+                                
+                                completed++;
+                                if (completed === absencePolicies.length) {
+                                    db.run('COMMIT');
+                                    resolve();
                                 }
                             }
                         );
                     });
-                    
-                    resolve();
                 } else {
-                    // Create new policies
-                    absencePolicies.forEach(policy => {
-                        db.run(
-                            `INSERT INTO absence_policies (
-                             department_id, min_days_notice, max_consecutive_days, 
-                             approval_required, documentation_required_after,
-                             max_sick_days, max_vacation_days, max_personal_days)
-                             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-                            [
-                                policy.departmentId,
-                                policy.minDaysNotice,
-                                policy.maxConsecutiveDays,
-                                policy.approvalRequired ? 1 : 0,
-                                policy.documentationRequiredAfter,
-                                policy.maxSickDays,
-                                policy.maxVacationDays,
-                                policy.maxPersonalDays
-                            ],
-                            function(err) {
-                                if (err) {
-                                    console.error('Error creating policy:', err, policy);
+                    // Clear existing policies to avoid duplicates
+                    db.run('DELETE FROM absence_policies', [], (err) => {
+                        if (err) {
+                            db.run('ROLLBACK');
+                            return reject(err);
+                        }
+                        
+                        // Create new policies
+                        let completed = 0;
+                        absencePolicies.forEach(policy => {
+                            db.run(
+                                `INSERT INTO absence_policies (
+                                 department_id, min_days_notice, max_consecutive_days, 
+                                 approval_required, documentation_required_after,
+                                 max_sick_days, max_vacation_days, max_personal_days)
+                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+                                [
+                                    policy.departmentId,
+                                    policy.minDaysNotice,
+                                    policy.maxConsecutiveDays,
+                                    policy.approvalRequired ? 1 : 0,
+                                    policy.documentationRequiredAfter,
+                                    policy.maxSickDays,
+                                    policy.maxVacationDays,
+                                    policy.maxPersonalDays
+                                ],
+                                function(err) {
+                                    if (err) {
+                                        console.error('Error creating policy:', err);
+                                        db.run('ROLLBACK');
+                                        return reject(err);
+                                    }
+                                    
+                                    completed++;
+                                    if (completed === absencePolicies.length) {
+                                        db.run('COMMIT');
+                                        resolve();
+                                    }
                                 }
-                            }
-                        );
+                            );
+                        });
                     });
-                    
-                    resolve();
                 }
             });
         });
@@ -630,34 +611,75 @@ const seedAbsencePolicies = () => {
 const seedLeaveBalances = () => {
     return new Promise((resolve, reject) => {
         db.serialize(() => {
-            // Generate leave balances for all employees
-            const stmt = db.prepare(
-                'INSERT INTO leave_balances (employee_id, year, vacation_days, sick_days, personal_days) VALUES (?, ?, ?, ?, ?)'
+            db.run('BEGIN TRANSACTION');
+            
+            // First check if leave balances exist for current year
+            db.get(
+                'SELECT COUNT(*) as count FROM leave_balances WHERE year = ?',
+                [currentYear],
+                (err, row) => {
+                    if (err) {
+                        db.run('ROLLBACK');
+                        return reject(err);
+                    }
+                    
+                    if (row && row.count > 0) {
+                        console.log(`Leave balances already exist for ${currentYear} (${row.count} found). Skipping...`);
+                        db.run('COMMIT');
+                        return resolve();
+                    }
+                    
+                    // Generate leave balances for all employees
+                    let completed = 0;
+                    const employeeCount = Object.keys(employeeIdMap).length;
+                    
+                    if (employeeCount === 0) {
+                        console.log('No employees found. Skipping leave balances.');
+                        db.run('COMMIT');
+                        return resolve();
+                    }
+                    
+                    for (const username in employeeIdMap) {
+                        const employeeId = employeeIdMap[username];
+                        const user = employeeUsers.find(u => u.username === username);
+                        const departmentId = user.departmentId;
+                        const policy = absencePolicies.find(p => p.departmentId === departmentId);
+                        
+                        if (!policy) {
+                            console.error(`No policy found for department ${departmentId}`);
+                            completed++;
+                            if (completed === employeeCount) {
+                                db.run('COMMIT');
+                                resolve();
+                            }
+                            continue;
+                        }
+                        
+                        // Randomly allocate between 70-100% of max allowed days
+                        const vacationDays = Math.floor(policy.maxVacationDays * (0.7 + Math.random() * 0.3));
+                        const sickDays = Math.floor(policy.maxSickDays * (0.7 + Math.random() * 0.3));
+                        const personalDays = Math.floor(policy.maxPersonalDays * (0.7 + Math.random() * 0.3));
+                        
+                        db.run(
+                            'INSERT INTO leave_balances (employee_id, year, vacation_days, sick_days, personal_days) VALUES (?, ?, ?, ?, ?)',
+                            [employeeId, currentYear, vacationDays, sickDays, personalDays],
+                            function(err) {
+                                if (err) {
+                                    console.error('Error creating leave balance:', err);
+                                    db.run('ROLLBACK');
+                                    return reject(err);
+                                }
+                                
+                                completed++;
+                                if (completed === employeeCount) {
+                                    db.run('COMMIT');
+                                    resolve();
+                                }
+                            }
+                        );
+                    }
+                }
             );
-
-            for (const username in employeeIdMap) {
-                const employeeId = employeeIdMap[username];
-                const departmentId = employeeUsers.find(u => u.username === username).departmentId;
-                const policy = absencePolicies.find(p => p.departmentId === departmentId);
-                
-                // Randomly allocate between 70-100% of max allowed days
-                const vacationDays = Math.floor(policy.maxVacationDays * (0.7 + Math.random() * 0.3));
-                const sickDays = Math.floor(policy.maxSickDays * (0.7 + Math.random() * 0.3));
-                const personalDays = Math.floor(policy.maxPersonalDays * (0.7 + Math.random() * 0.3));
-                
-                stmt.run(
-                    employeeId,
-                    currentYear,
-                    vacationDays,
-                    sickDays,
-                    personalDays
-                );
-            }
-
-            stmt.finalize(err => {
-                if (err) return reject(err);
-                resolve();
-            });
         });
     });
 };
@@ -668,204 +690,257 @@ const seedLeaveBalances = () => {
 const seedAbsenceRequests = () => {
     return new Promise((resolve, reject) => {
         db.serialize(() => {
-            // Generate some absence requests for each employee
-            const absenceRequests = [];
-            const statuses = ['pending', 'approved', 'rejected', 'cancelled'];
-            const types = ['vacation', 'sick', 'personal'];
+            db.run('BEGIN TRANSACTION');
             
-            // Create absence requests for each employee
-            for (const username in employeeIdMap) {
-                const employeeId = employeeIdMap[username];
+            // First check if absence requests already exist
+            db.get('SELECT COUNT(*) as count FROM absence_requests', [], (err, row) => {
+                if (err) {
+                    db.run('ROLLBACK');
+                    return reject(err);
+                }
                 
-                // Generate 1-4 absence requests per employee
-                const numRequests = 1 + Math.floor(Math.random() * 4);
+                if (row && row.count > 0) {
+                    console.log(`Absence requests already exist (${row.count} found). Skipping...`);
+                    db.run('COMMIT');
+                    return resolve();
+                }
                 
-                for (let i = 0; i < numRequests; i++) {
-                    // Random properties for this request
-                    const type = types[Math.floor(Math.random() * types.length)];
-                    const status = statuses[Math.floor(Math.random() * statuses.length)];
+                // Generate some absence requests for each employee
+                const statuses = ['pending', 'approved', 'rejected', 'cancelled'];
+                const types = ['vacation', 'sick', 'personal'];
+                
+                // Data structure for absence requests to create
+                const absenceRequests = [];
+                
+                // Create absence requests for each employee
+                for (const username in employeeIdMap) {
+                    const employeeId = employeeIdMap[username];
                     
-                    // Random date in current year
-                    const monthOffset = Math.floor(Math.random() * 12);
-                    const dayOffset = 1 + Math.floor(Math.random() * 28);
-                    const startDate = getDateInCurrentYear(monthOffset, dayOffset);
+                    // Generate 1-3 absence requests per employee
+                    const numRequests = 1 + Math.floor(Math.random() * 3);
                     
-                    // Duration 1-7 days
-                    const duration = 1 + Math.floor(Math.random() * 7);
-                    const endDateObj = new Date(currentYear, monthOffset, dayOffset + duration - 1);
-                    const endDate = formatDate(endDateObj);
-                    
-                    // Random comments
-                    let comments = '';
-                    if (type === 'vacation') {
-                        const vacationReasons = ['Family vacation', 'Personal trip', 'Visiting relatives', 'Taking time off', 'Relaxation break'];
-                        comments = vacationReasons[Math.floor(Math.random() * vacationReasons.length)];
-                    } else if (type === 'sick') {
-                        const sickReasons = ['Not feeling well', 'Doctor appointment', 'Medical procedure', 'Recovery time'];
-                        comments = sickReasons[Math.floor(Math.random() * sickReasons.length)];
-                    } else {
-                        const personalReasons = ['Personal matters', 'Family event', 'Home repairs', 'Moving day', 'Administrative errands'];
-                        comments = personalReasons[Math.floor(Math.random() * personalReasons.length)];
+                    for (let i = 0; i < numRequests; i++) {
+                        // Random properties for this request
+                        const type = types[Math.floor(Math.random() * types.length)];
+                        const status = statuses[Math.floor(Math.random() * statuses.length)];
+                        
+                        // Random date in current year
+                        const monthOffset = Math.floor(Math.random() * 12);
+                        const dayOffset = 1 + Math.floor(Math.random() * 28);
+                        const startDate = getDateInCurrentYear(monthOffset, dayOffset);
+                        
+                        // Duration 1-5 days
+                        const duration = 1 + Math.floor(Math.random() * 5);
+                        const endDateObj = new Date(currentYear, monthOffset, dayOffset + duration - 1);
+                        const endDate = formatDate(endDateObj);
+                        
+                        // Random comments
+                        let comments = '';
+                        if (type === 'vacation') {
+                            const vacationReasons = ['Family vacation', 'Personal trip', 'Visiting relatives', 'Taking time off'];
+                            comments = vacationReasons[Math.floor(Math.random() * vacationReasons.length)];
+                        } else if (type === 'sick') {
+                            const sickReasons = ['Not feeling well', 'Doctor appointment', 'Medical procedure'];
+                            comments = sickReasons[Math.floor(Math.random() * sickReasons.length)];
+                        } else {
+                            const personalReasons = ['Personal matters', 'Family event', 'Home repairs', 'Moving day'];
+                            comments = personalReasons[Math.floor(Math.random() * personalReasons.length)];
+                        }
+                        
+                        absenceRequests.push({
+                            employeeId,
+                            startDate,
+                            endDate,
+                            type,
+                            status,
+                            hasDocumentation: Math.random() > 0.7, // 30% chance of having documentation
+                            comments
+                        });
+                    }
+                }
+                
+                // Process requests one by one (sequentially to avoid race conditions)
+                const processRequests = async (index) => {
+                    if (index >= absenceRequests.length) {
+                        // All requests processed
+                        db.run('COMMIT', (err) => {
+                            if (err) {
+                                console.error('Error committing transaction:', err);
+                                db.run('ROLLBACK');
+                                return reject(err);
+                            }
+                            resolve();
+                        });
+                        return;
                     }
                     
-                    absenceRequests.push({
-                        employeeId,
-                        startDate,
-                        endDate,
-                        type,
-                        status,
-                        hasDocumentation: Math.random() > 0.7, // 30% chance of having documentation
-                        comments
-                    });
-                }
-            }
-            
-            // Insert all the requests
-            for (const request of absenceRequests) {
-                db.run(
-                    `INSERT INTO absence_requests 
-                    (employee_id, start_date, end_date, type, status, has_documentation, comments, submission_time) 
-                    VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now', '-' || ? || ' days'))`,
-                    [
-                        request.employeeId,
-                        request.startDate,
-                        request.endDate,
-                        request.type,
-                        request.status,
-                        request.hasDocumentation ? 1 : 0,
-                        request.comments,
-                        Math.floor(Math.random() * 30) // Submitted within the last 30 days
-                    ],
-                    function(err) {
-                        if (err) {
-                            console.error('Error creating request:', err);
-                            return;
-                        }
-
-                        const requestId = this.lastID;
-
-                        // Get employee's manager
-                        db.get(
-                            'SELECT manager_id FROM employees WHERE id = ?',
-                            [request.employeeId],
-                            (err, row) => {
-                                if (err) {
-                                    console.error('Error getting manager:', err);
-                                    return;
+                    const request = absenceRequests[index];
+                    
+                    try {
+                        // 1. Insert the absence request
+                        const requestId = await new Promise((resolve, reject) => {
+                            db.run(
+                                `INSERT INTO absence_requests 
+                                (employee_id, start_date, end_date, type, status, has_documentation, comments, submission_time) 
+                                VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now', '-' || ? || ' days'))`,
+                                [
+                                    request.employeeId,
+                                    request.startDate,
+                                    request.endDate,
+                                    request.type,
+                                    request.status,
+                                    request.hasDocumentation ? 1 : 0,
+                                    request.comments,
+                                    Math.floor(Math.random() * 30) // Submitted within the last 30 days
+                                ],
+                                function(err) {
+                                    if (err) {
+                                        console.error('Error creating request:', err);
+                                        return reject(err);
+                                    }
+                                    resolve(this.lastID);
                                 }
-
-                                // Add to registry
+                            );
+                        });
+                        
+                        // 2. Get employee's manager information
+                        const employee = await new Promise((resolve, reject) => {
+                            db.get(
+                                'SELECT e.id, e.manager_id, a.id as account_id FROM employees e JOIN accounts a ON e.account_id = a.id WHERE e.id = ?',
+                                [request.employeeId],
+                                (err, row) => {
+                                    if (err) return reject(err);
+                                    if (!row) return reject(new Error(`Employee not found: ${request.employeeId}`));
+                                    resolve(row);
+                                }
+                            );
+                        });
+                        
+                        // 3. Insert registry entry
+                        // NOTE: In your schema, manager_id in absence_registry refers to employees.manager_id (account_id)
+                        // not the managers.id
+                        await new Promise((resolve, reject) => {
+                            db.run(
+                                `INSERT INTO absence_registry 
+                                (request_id, employee_id, manager_id, creation_date, approval_status, notification_sent) 
+                                VALUES (?, ?, ?, date(?), ?, 1)`,
+                                [
+                                    requestId,
+                                    request.employeeId,
+                                    employee.manager_id, // This is account_id of manager
+                                    request.startDate,
+                                    request.status
+                                ],
+                                function(err) {
+                                    if (err) {
+                                        console.error('Error creating registry entry:', err);
+                                        return reject(err);
+                                    }
+                                    resolve(this.lastID);
+                                }
+                            );
+                        });
+                        
+                        // 4. Create notifications if necessary
+                        if (employee.manager_id && request.status === 'pending') {
+                            // Notification for manager
+                            await new Promise((resolve, reject) => {
                                 db.run(
-                                    `INSERT INTO absence_registry 
-                                    (request_id, employee_id, manager_id, creation_date, approval_status, notification_sent) 
-                                    VALUES (?, ?, ?, date(?), ?, 1)`,
+                                    `INSERT INTO notifications 
+                                    (request_id, recipient_id, type, status, content, sent_date) 
+                                    VALUES (?, ?, 'approval_request', ?, 'New absence request requires your approval', date('now', '-' || ? || ' days'))`,
                                     [
                                         requestId,
-                                        request.employeeId,
-                                        row ? row.manager_id : null,
-                                        request.startDate,
-                                        request.status
+                                        employee.manager_id,
+                                        Math.random() > 0.5 ? 'read' : 'unread', // 50% chance of being read
+                                        Math.floor(Math.random() * 10) // Sent within the last 10 days
                                     ],
                                     function(err) {
                                         if (err) {
-                                            console.error('Error creating registry entry:', err);
+                                            console.error('Error creating manager notification:', err);
+                                            return reject(err);
                                         }
-
-                                        // Create appropriate notifications
-                                        if (row && row.manager_id) {
-                                            // Get manager's account ID
-                                            db.get(
-                                                'SELECT account_id FROM managers WHERE id = ?',
-                                                [row.manager_id],
-                                                (err, manager) => {
-                                                    if (err || !manager) {
-                                                        console.error('Error getting manager account:', err);
-                                                        return;
-                                                    }
-                                                    
-                                                    // Notification for manager if request is pending
-                                                    if (request.status === 'pending') {
-                                                        db.run(
-                                                            `INSERT INTO notifications 
-                                                            (request_id, recipient_id, type, status, content, sent_date) 
-                                                            VALUES (?, ?, 'approval_request', ?, 'New absence request requires your approval', date('now', '-' || ? || ' days'))`,
-                                                            [
-                                                                requestId,
-                                                                manager.account_id,
-                                                                Math.random() > 0.5 ? 'read' : 'unread', // 50% chance of being read
-                                                                Math.floor(Math.random() * 10) // Sent within the last 10 days
-                                                            ]
-                                                        );
-                                                    }
-                                                }
-                                            );
-                                        }
-
-                                        // Get employee account ID for notifications
-                                        db.get(
-                                            'SELECT account_id FROM employees WHERE id = ?',
-                                            [request.employeeId],
-                                            (err, employee) => {
-                                                if (err || !employee) {
-                                                    console.error('Error getting employee:', err);
-                                                    return;
-                                                }
-
-                                                // Add notification for approved/rejected requests
-                                                if (request.status === 'approved' || request.status === 'rejected') {
-                                                    db.run(
-                                                        `INSERT INTO notifications 
-                                                        (request_id, recipient_id, type, status, content, sent_date) 
-                                                        VALUES (?, ?, ?, ?, ?, date('now', '-' || ? || ' days'))`,
-                                                        [
-                                                            requestId,
-                                                            employee.account_id,
-                                                            request.status === 'approved' ? 'request_approved' : 'request_rejected',
-                                                            Math.random() > 0.3 ? 'read' : 'unread', // 70% chance of being read
-                                                            request.status === 'approved' ? 'Your absence request has been approved' : 'Your absence request has been rejected',
-                                                            Math.floor(Math.random() * 7) // Sent within the last 7 days
-                                                        ]
-                                                    );
-                                                    
-                                                    // If approved, update leave balance
-                                                    if (request.status === 'approved') {
-                                                        // Calculate days
-                                                        const startDate = new Date(request.startDate);
-                                                        const endDate = new Date(request.endDate);
-                                                        const diffTime = Math.abs(endDate - startDate);
-                                                        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
-                                                        
-                                                        let balanceField;
-                                                        switch (request.type) {
-                                                            case 'vacation': balanceField = 'vacation_days'; break;
-                                                            case 'sick': balanceField = 'sick_days'; break;
-                                                            case 'personal': balanceField = 'personal_days'; break;
-                                                        }
-
-                                                        if (balanceField) {
-                                                            const year = new Date(request.startDate).getFullYear();
-
-                                                            db.run(
-                                                                `UPDATE leave_balances SET 
-                                                                ${balanceField} = ${balanceField} - ?
-                                                                WHERE employee_id = ? AND year = ?`,
-                                                                [diffDays, request.employeeId, year]
-                                                            );
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        );
+                                        resolve();
                                     }
                                 );
+                            });
+                        }
+                        
+                        // Notification for employee if approved/rejected
+                        if (request.status === 'approved' || request.status === 'rejected') {
+                            await new Promise((resolve, reject) => {
+                                db.run(
+                                    `INSERT INTO notifications 
+                                    (request_id, recipient_id, type, status, content, sent_date) 
+                                    VALUES (?, ?, ?, ?, ?, date('now', '-' || ? || ' days'))`,
+                                    [
+                                        requestId,
+                                        employee.account_id,
+                                        request.status === 'approved' ? 'request_approved' : 'request_rejected',
+                                        Math.random() > 0.3 ? 'read' : 'unread', // 70% chance of being read
+                                        request.status === 'approved' ? 'Your absence request has been approved' : 'Your absence request has been rejected',
+                                        Math.floor(Math.random() * 7) // Sent within the last 7 days
+                                    ],
+                                    function(err) {
+                                        if (err) {
+                                            console.error('Error creating employee notification:', err);
+                                            return reject(err);
+                                        }
+                                        resolve();
+                                    }
+                                );
+                            });
+                        }
+                        
+                        // 5. If approved, update leave balance
+                        if (request.status === 'approved') {
+                            // Calculate days
+                            const startDate = new Date(request.startDate);
+                            const endDate = new Date(request.endDate);
+                            const diffTime = Math.abs(endDate - startDate);
+                            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1;
+                            
+                            let balanceField;
+                            switch (request.type) {
+                                case 'vacation': balanceField = 'vacation_days'; break;
+                                case 'sick': balanceField = 'sick_days'; break;
+                                case 'personal': balanceField = 'personal_days'; break;
                             }
-                        );
-                    }
-                );
-            }
 
-            // Wait a bit for all async operations to complete
-            setTimeout(() => resolve(), 2000);
+                            if (balanceField) {
+                                const year = new Date(request.startDate).getFullYear();
+                                
+                                await new Promise((resolve, reject) => {
+                                    db.run(
+                                        `UPDATE leave_balances SET 
+                                        ${balanceField} = ${balanceField} - ?
+                                        WHERE employee_id = ? AND year = ?`,
+                                        [diffDays, request.employeeId, year],
+                                        function(err) {
+                                            if (err) {
+                                                console.error('Error updating leave balance:', err);
+                                                return reject(err);
+                                            }
+                                            resolve();
+                                        }
+                                    );
+                                });
+                            }
+                        }
+                        
+                        // Process next request
+                        processRequests(index + 1);
+                        
+                    } catch (error) {
+                        console.error('Error processing request:', error);
+                        // Continue with next request despite errors
+                        processRequests(index + 1);
+                    }
+                };
+                
+                // Start processing requests
+                processRequests(0);
+            });
         });
     });
 };
